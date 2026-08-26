@@ -1,7 +1,8 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import confetti from 'canvas-confetti';
 import { Cotacao, QuoteStatus, User } from './types';
-import { loadCotacoes, saveCotacoes, loadUsers, saveUsers, loadActiveUser, saveActiveUser, resetToInitialData } from './lib/storage';
+import { loadCotacoes, saveCotacoes, loadUsers, saveUsers, loadActiveUser, saveActiveUser, resetToInitialData, syncFromSupabase } from './lib/storage';
+import { isSupabaseConfigured } from './lib/supabase/client';
 import { Header } from './components/Header';
 import { KanbanBoard } from './components/KanbanBoard';
 import { AdminDashboard } from './components/AdminDashboard';
@@ -11,12 +12,13 @@ import { UploadModal } from './components/UploadModal';
 import { QuoteDetailModal } from './components/QuoteDetailModal';
 import { LossReasonModal } from './components/LossReasonModal';
 import { ToastContainer, ToastMessage } from './components/Toast';
+import { LoginScreen } from './components/LoginScreen';
 import { formatCurrencyBRL } from './lib/formatters';
 
 export default function App() {
   const [cotacoes, setCotacoes] = useState<Cotacao[]>(() => loadCotacoes());
   const [users, setUsers] = useState<User[]>(() => loadUsers());
-  const [activeUser, setActiveUser] = useState<User>(() => loadActiveUser());
+  const [activeUser, setActiveUser] = useState<User | null>(() => loadActiveUser());
   const [currentTab, setCurrentTab] = useState<'kanban' | 'dashboard' | 'vendedores' | 'email'>('kanban');
   
   // Modals & Selected items state
@@ -39,6 +41,27 @@ export default function App() {
   const dismissToast = (id: string) => {
     setToasts(prev => prev.filter(t => t.id !== id));
   };
+
+  // Initial load from Supabase if configured
+  useEffect(() => {
+    if (isSupabaseConfigured()) {
+      syncFromSupabase().then(data => {
+        if (data) {
+          if (data.cotacoes && data.cotacoes.length > 0) {
+            setCotacoes(data.cotacoes);
+          }
+          if (data.users && data.users.length > 0) {
+            setUsers(data.users);
+          }
+          addToast({
+            type: 'info',
+            title: 'Supabase Conectado',
+            description: 'Dados sincronizados com o banco de dados em nuvem.',
+          });
+        }
+      });
+    }
+  }, []);
 
   // Sync state to local storage
   useEffect(() => {
@@ -64,6 +87,9 @@ export default function App() {
     // If switching from admin to vendedor, reset vendor filter
     if (newUser.role === 'vendedor') {
       setSelectedVendorFilter(newUser.uid);
+      if (currentTab === 'dashboard' || currentTab === 'vendedores') {
+        setCurrentTab('kanban');
+      }
     } else {
       setSelectedVendorFilter('todos');
     }
@@ -71,6 +97,34 @@ export default function App() {
       type: 'info',
       title: `Perfil alterado para ${newUser.nome}`,
       description: `Visualizando como ${newUser.role === 'admin' ? 'Administrador' : 'Vendedor'}`
+    });
+  };
+
+  // Login handler
+  const handleLogin = (user: User) => {
+    setActiveUser(user);
+    if (user.role === 'vendedor') {
+      setSelectedVendorFilter(user.uid);
+      setCurrentTab('kanban');
+    } else {
+      setSelectedVendorFilter('todos');
+      setCurrentTab('dashboard');
+    }
+    addToast({
+      type: 'success',
+      title: `Bem-vindo(a), ${user.nome}!`,
+      description: `Sessão iniciada como ${user.role === 'admin' ? 'Administrador' : 'Consultor Comercial'}.`
+    });
+  };
+
+  // Logout handler
+  const handleLogout = () => {
+    setActiveUser(null);
+    setCurrentTab('kanban');
+    addToast({
+      type: 'info',
+      title: 'Sessão encerrada',
+      description: 'Você saiu da sua conta com sucesso.'
     });
   };
 
@@ -253,7 +307,7 @@ export default function App() {
     });
   };
 
-  // Add new salesperson
+  // Add new user / salesperson
   const handleAddUser = (newUser: Partial<User>) => {
     const newUid = `user_${Date.now()}`;
     const user: User = {
@@ -261,32 +315,34 @@ export default function App() {
       nome: newUser.nome || 'Novo Consultor',
       email: newUser.email || 'vendedor@corretora.com.br',
       telefone: newUser.telefone,
-      role: 'vendedor',
+      role: newUser.role || 'vendedor',
+      cargo: newUser.cargo || (newUser.role === 'admin' ? 'Administrador' : 'Consultor Comercial'),
       ativo: true,
       dataCriacao: new Date().toISOString(),
-      metaFaturamento: newUser.metaFaturamento || 100000,
-      metaVolume: newUser.metaVolume || 20,
+      criadoPor: activeUser?.nome || 'Admin',
+      metaFaturamento: newUser.metaFaturamento || (newUser.role === 'admin' ? 300000 : 100000),
+      metaVolume: newUser.metaVolume || (newUser.role === 'admin' ? 50 : 20),
       avatar: newUser.avatar
     };
 
     setUsers(prev => [...prev, user]);
     addToast({
       type: 'success',
-      title: 'Vendedor Cadastrado!',
-      description: `${user.nome} já pode acessar o sistema e gerenciar suas metas.`
+      title: `${user.role === 'admin' ? 'Administrador' : 'Vendedor'} Cadastrado!`,
+      description: `${user.nome} (${user.email}) foi cadastrado com sucesso.`
     });
   };
 
-  // Update salesperson
+  // Update salesperson / user
   const handleUpdateUser = (updatedUser: User) => {
     setUsers(prev => prev.map(u => u.uid === updatedUser.uid ? updatedUser : u));
-    if (activeUser.uid === updatedUser.uid) {
+    if (activeUser && activeUser.uid === updatedUser.uid) {
       setActiveUser(updatedUser);
     }
     addToast({
       type: 'success',
-      title: 'Metas Atualizadas',
-      description: `As metas de ${updatedUser.nome} foram salvas com sucesso.`
+      title: 'Dados Atualizados',
+      description: `O cadastro de ${updatedUser.nome} foi atualizado com sucesso.`
     });
   };
 
@@ -326,6 +382,22 @@ export default function App() {
     }
   };
 
+  // If not logged in, render the Login Screen
+  if (!activeUser) {
+    return (
+      <>
+        <LoginScreen
+          users={users}
+          onLogin={handleLogin}
+        />
+        <ToastContainer
+          toasts={toasts}
+          onDismiss={dismissToast}
+        />
+      </>
+    );
+  }
+
   return (
     <div className="min-h-screen bg-[#f5f7fa] flex flex-col font-sans text-slate-800 selection:bg-orange-500 selection:text-white">
       
@@ -334,6 +406,7 @@ export default function App() {
         activeUser={activeUser}
         allUsers={users}
         onSwitchUser={handleSwitchUser}
+        onLogout={handleLogout}
         currentTab={currentTab}
         onChangeTab={setCurrentTab}
         onOpenUpload={() => setIsUploadOpen(true)}
@@ -376,6 +449,7 @@ export default function App() {
           <VendorManagement
             users={users}
             cotacoes={cotacoes}
+            currentUser={activeUser}
             onAddUser={handleAddUser}
             onUpdateUser={handleUpdateUser}
             onViewVendorKanban={handleViewVendorKanban}

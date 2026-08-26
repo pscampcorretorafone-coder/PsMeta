@@ -1,15 +1,22 @@
 import { Cotacao, User } from '../types';
 import { INITIAL_COTACOES, INITIAL_USERS } from '../mockData';
+import { isSupabaseConfigured } from './supabase/client';
+import {
+  getCotacoesFromSupabase,
+  saveCotacaoToSupabase,
+  getUsersFromSupabase,
+  saveUserToSupabase,
+} from './supabase/services';
 
-const COTAZOES_STORAGE_KEY = 'segurflow_cotacoes_v1';
+const COTACOES_STORAGE_KEY = 'segurflow_cotacoes_v1';
 const USERS_STORAGE_KEY = 'segurflow_users_v1';
 const ACTIVE_USER_STORAGE_KEY = 'segurflow_active_user_v1';
 
 export function loadCotacoes(): Cotacao[] {
   try {
-    const data = localStorage.getItem(COTAZOES_STORAGE_KEY);
+    const data = localStorage.getItem(COTACOES_STORAGE_KEY);
     if (!data) {
-      localStorage.setItem(COTAZOES_STORAGE_KEY, JSON.stringify(INITIAL_COTACOES));
+      localStorage.setItem(COTACOES_STORAGE_KEY, JSON.stringify(INITIAL_COTACOES));
       return INITIAL_COTACOES;
     }
     return JSON.parse(data);
@@ -21,7 +28,15 @@ export function loadCotacoes(): Cotacao[] {
 
 export function saveCotacoes(cotacoes: Cotacao[]): void {
   try {
-    localStorage.setItem(COTAZOES_STORAGE_KEY, JSON.stringify(cotacoes));
+    localStorage.setItem(COTACOES_STORAGE_KEY, JSON.stringify(cotacoes));
+    // Asynchronous background sync with Supabase if configured
+    if (isSupabaseConfigured()) {
+      cotacoes.forEach(cotacao => {
+        saveCotacaoToSupabase(cotacao).catch(err =>
+          console.warn('Background Supabase sync error for quote:', cotacao.id, err)
+        );
+      });
+    }
   } catch (e) {
     console.error('Error saving cotacoes to localStorage', e);
   }
@@ -44,41 +59,81 @@ export function loadUsers(): User[] {
 export function saveUsers(users: User[]): void {
   try {
     localStorage.setItem(USERS_STORAGE_KEY, JSON.stringify(users));
+    // Asynchronous background sync with Supabase if configured
+    if (isSupabaseConfigured()) {
+      users.forEach(user => {
+        saveUserToSupabase(user).catch(err =>
+          console.warn('Background Supabase sync error for user:', user.uid, err)
+        );
+      });
+    }
   } catch (e) {
     console.error('Error saving users to localStorage', e);
   }
 }
 
-export function loadActiveUser(): User {
+export function loadActiveUser(): User | null {
   try {
     const data = localStorage.getItem(ACTIVE_USER_STORAGE_KEY);
     if (data) {
       const parsed = JSON.parse(data);
       const allUsers = loadUsers();
       const match = allUsers.find(u => u.uid === parsed.uid);
-      if (match) return match;
+      if (match && match.ativo) return match;
     }
   } catch (e) {
     console.error('Error loading active user', e);
   }
-  // Default to Carlos Mendes (Vendedor)
-  return INITIAL_USERS[0];
+  return null;
 }
 
-export function saveActiveUser(user: User): void {
+export function saveActiveUser(user: User | null): void {
   try {
-    localStorage.setItem(ACTIVE_USER_STORAGE_KEY, JSON.stringify(user));
+    if (user) {
+      localStorage.setItem(ACTIVE_USER_STORAGE_KEY, JSON.stringify(user));
+    } else {
+      localStorage.removeItem(ACTIVE_USER_STORAGE_KEY);
+    }
   } catch (e) {
     console.error('Error saving active user', e);
   }
 }
 
 export function resetToInitialData(): { cotacoes: Cotacao[]; users: User[] } {
-  localStorage.setItem(COTAZOES_STORAGE_KEY, JSON.stringify(INITIAL_COTACOES));
+  localStorage.setItem(COTACOES_STORAGE_KEY, JSON.stringify(INITIAL_COTACOES));
   localStorage.setItem(USERS_STORAGE_KEY, JSON.stringify(INITIAL_USERS));
   localStorage.setItem(ACTIVE_USER_STORAGE_KEY, JSON.stringify(INITIAL_USERS[0]));
   return {
     cotacoes: INITIAL_COTACOES,
     users: INITIAL_USERS,
   };
+}
+
+/**
+ * Hydrates state from Supabase if connected
+ */
+export async function syncFromSupabase(): Promise<{ cotacoes: Cotacao[]; users: User[] } | null> {
+  if (!isSupabaseConfigured()) return null;
+
+  try {
+    const [remoteCotacoes, remoteUsers] = await Promise.all([
+      getCotacoesFromSupabase(),
+      getUsersFromSupabase(),
+    ]);
+
+    if (remoteCotacoes && remoteCotacoes.length > 0) {
+      localStorage.setItem(COTACOES_STORAGE_KEY, JSON.stringify(remoteCotacoes));
+    }
+    if (remoteUsers && remoteUsers.length > 0) {
+      localStorage.setItem(USERS_STORAGE_KEY, JSON.stringify(remoteUsers));
+    }
+
+    return {
+      cotacoes: remoteCotacoes || loadCotacoes(),
+      users: remoteUsers || loadUsers(),
+    };
+  } catch (e) {
+    console.error('Falha ao sincronizar com o Supabase:', e);
+    return null;
+  }
 }

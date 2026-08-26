@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { 
   Shield, 
   FileUp, 
@@ -6,18 +6,22 @@ import {
   Kanban, 
   Users, 
   Mail, 
-  Sparkles, 
   ChevronDown, 
   Check, 
   RotateCcw,
-  Bot
+  Bot,
+  Database,
+  LogOut
 } from 'lucide-react';
 import { User } from '../types';
+import { isSupabaseConfigured } from '../lib/supabase/client';
+import { DatabaseStatusModal } from './DatabaseStatusModal';
 
 interface HeaderProps {
   activeUser: User;
   allUsers: User[];
   onSwitchUser: (user: User) => void;
+  onLogout: () => void;
   currentTab: 'kanban' | 'dashboard' | 'vendedores' | 'email';
   onChangeTab: (tab: 'kanban' | 'dashboard' | 'vendedores' | 'email') => void;
   onOpenUpload: () => void;
@@ -29,13 +33,16 @@ export const Header: React.FC<HeaderProps> = ({
   activeUser,
   allUsers,
   onSwitchUser,
+  onLogout,
   currentTab,
   onChangeTab,
   onOpenUpload,
   onResetData,
   quotesCount,
 }) => {
-  const [userDropdownOpen, setUserDropdownOpen] = React.useState(false);
+  const [userDropdownOpen, setUserDropdownOpen] = useState(false);
+  const [dbModalOpen, setDbModalOpen] = useState(false);
+  const isSupabaseLive = isSupabaseConfigured();
 
   return (
     <header className="sticky top-0 z-40 bg-[#101b42] border-b border-indigo-900/60 shadow-md text-white">
@@ -119,6 +126,23 @@ export const Header: React.FC<HeaderProps> = ({
 
           {/* Right Action Area */}
           <div className="flex items-center gap-2.5">
+            {/* Database status button */}
+            <button
+              onClick={() => setDbModalOpen(true)}
+              title={isSupabaseLive ? "Supabase Conectado" : "Supabase: Modo Local (Clique para instruções)"}
+              className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl border text-xs font-semibold transition-all cursor-pointer ${
+                isSupabaseLive
+                  ? 'bg-emerald-950/60 border-emerald-500/50 text-emerald-300 hover:bg-emerald-900/60'
+                  : 'bg-slate-900/80 border-slate-700 text-slate-300 hover:bg-slate-800'
+              }`}
+            >
+              <Database className={`w-3.5 h-3.5 ${isSupabaseLive ? 'text-emerald-400' : 'text-amber-400'}`} />
+              <span className="hidden lg:inline text-[11px]">
+                {isSupabaseLive ? 'Supabase' : 'DB Local'}
+              </span>
+              <span className={`w-1.5 h-1.5 rounded-full ${isSupabaseLive ? 'bg-emerald-400 animate-pulse' : 'bg-amber-400'}`} />
+            </button>
+
             {/* New Quote Button */}
             <button
               onClick={onOpenUpload}
@@ -208,16 +232,27 @@ export const Header: React.FC<HeaderProps> = ({
                       })}
                     </div>
 
-                    <div className="pt-2 mt-1 border-t border-slate-800 px-2">
+                    <div className="pt-2 mt-1 border-t border-slate-800 px-2 space-y-1">
                       <button
                         onClick={() => {
                           onResetData();
                           setUserDropdownOpen(false);
                         }}
-                        className="w-full flex items-center gap-2 p-1.5 text-[11px] text-slate-400 hover:text-rose-300 hover:bg-slate-800/80 rounded transition-colors"
+                        className="w-full flex items-center gap-2 p-1.5 text-[11px] text-slate-400 hover:text-rose-300 hover:bg-slate-800/80 rounded transition-colors cursor-pointer"
                       >
                         <RotateCcw className="w-3.5 h-3.5" />
                         <span>Restaurar dados de exemplo</span>
+                      </button>
+
+                      <button
+                        onClick={() => {
+                          setUserDropdownOpen(false);
+                          onLogout();
+                        }}
+                        className="w-full flex items-center gap-2 p-1.5 text-[11px] text-red-400 hover:text-red-300 hover:bg-red-950/40 rounded transition-colors font-semibold cursor-pointer"
+                      >
+                        <LogOut className="w-3.5 h-3.5" />
+                        <span>Sair / Trocar de Conta</span>
                       </button>
                     </div>
                   </div>
@@ -270,6 +305,12 @@ export const Header: React.FC<HeaderProps> = ({
         </div>
 
       </div>
+
+      {/* Supabase Database Status and Setup Modal */}
+      <DatabaseStatusModal
+        isOpen={dbModalOpen}
+        onClose={() => setDbModalOpen(false)}
+      />
     </header>
   );
 };
